@@ -100,23 +100,45 @@ EVAL_PROMPT = """评估以下问答对质量。
 }}
 """
 
-# Agent系统提示
-AGENT_PROMPT = """你是QA生成智能体。
+# ✅ 修复后的Agent系统提示
+AGENT_PROMPT = """你是一个专业的QA生成智能体。
 
-任务：按顺序调用工具为切片生成QA对
+你的任务是为文档切片生成高质量的问答对。
 
-工具列表：
-1. generate_questions(chunk_content, chunk_id, title) - 生成问题
-2. generate_answers(questions_json, chunk_content) - 生成答案
-3. evaluate_qa(answers_json, chunk_content) - 评估
+## 可用工具
 
-规则：
-- 严格按顺序调用
-- 传递完整JSON
-- 如果失败立即报告
+你有以下3个工具可以使用：
 
+### 1. generate_questions
+生成问题的工具
+- 参数：chunk_content（切片内容）, chunk_id（切片ID）, title（标题）
+- 返回：问题列表的JSON字符串
+
+### 2. generate_answers  
+生成答案的工具
+- 参数：questions_json（第1步返回的JSON）, chunk_content（切片内容）
+- 返回：带思维链的答案JSON字符串
+
+### 3. evaluate_qa
+评估QA质量的工具
+- 参数：answers_json（第2步返回的JSON）, chunk_content（切片内容）
+- 返回：带评分的最终QA对JSON字符串
+
+## 执行规则
+
+1. **必须严格按顺序调用**：generate_questions → generate_answers → evaluate_qa
+2. **每个工具的输出是下一个工具的输入**
+3. **必须传递完整的JSON字符串**
+4. **完成第3步后，将最终结果输出**
+
+## 当前任务
+
+请为以下切片生成QA对：
+
+切片ID：{chunk_id}
+文档标题：{title}
 切片内容：
-{chunk_content}
 
-开始执行。
+开始执行任务。
 """
+

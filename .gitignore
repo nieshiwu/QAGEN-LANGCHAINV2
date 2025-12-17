@@ -56,6 +56,10 @@ output.json
 test_*.json
 md_dir/
 output_dir/
+output/
+input/
+
+file1.md
 
 # Temporary Files
 *.tmp

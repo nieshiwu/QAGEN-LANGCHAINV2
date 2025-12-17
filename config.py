@@ -15,7 +15,7 @@ class Config:
     
     # ==================== LLM配置 ====================
     model_name: str = "qwen-max"
-    api_key: str = ""
+    api_key: str = "sk-d827323e50504e0f955ea3e319d933e0"
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     temperature: float = 0.7
     max_tokens: int = 4096
@@ -52,3 +52,4 @@ class Config:
         
         if not self.api_key:
             raise ValueError("未设置API Key，请在.env中配置DASHSCOPE_API_KEY")
+        
