@@ -13,6 +13,8 @@ from tools.question_gen import QuestionTool
 from tools.answer_gen import AnswerTool
 from tools.evaluator import EvalTool
 
+from prompts.templates import AGENT_PROMPT
+
 
 class Processor:
     """单切片处理器"""
@@ -44,7 +46,7 @@ class Processor:
         )
         
         # 系统提示
-        AGENT_PROMPT = """你是一个专业的QA生成智能体。
+        AGENT_PROMPT_BK = """你是一个专业的QA生成智能体。
 
 你的任务是按顺序调用3个工具来生成QA对：
 
@@ -77,7 +79,7 @@ class Processor:
             model=agent_llm, 
             tools=tools, 
             system_prompt=AGENT_PROMPT,
-            debug=True
+            # debug=True
         )
         
         print("  ✅ Agent初始化完成")
@@ -112,7 +114,7 @@ class Processor:
         """Agent模式 - 使用LangGraph"""
         try:
             # ✅ 关键修复：构建清晰的任务消息
-            task_message = f"""请为以下切片生成QA对。
+            task_message1 = f"""请为以下切片生成QA对。
 
 **切片信息（请在调用工具时使用这些参数）：**
 
@@ -135,6 +137,13 @@ title（文档标题）: {title}
    - chunk_content = 上面提供的文本内容
 
 现在开始执行第1步。
+"""
+
+            task_message = f"""请为以下切片生成QA对。
+chunk_content（切片内容）:{chunk.content}
+chunk_id（切片ID）: {chunk.chunk_id}
+title（文档标题）: {title}
+
 """
             
             print(f"    📤 发送消息:")

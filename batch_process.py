@@ -1,10 +1,10 @@
 """
-批量处理脚本 - 支持文件夹和多文件路径
+批量处理脚本 - 顺序执行版本（避免API限流）
 """
 import argparse
 import asyncio
 from pathlib import Path
-from typing import List, Union, Set
+from typing import List
 import json
 from datetime import datetime
 import sys
@@ -12,11 +12,11 @@ import logging
 
 from config import Config
 from core.orchestrator import Orchestrator
-from utils.judge import is_markdown_file,read_markdown,collect_all_markdown_files
+from utils.judge import is_markdown_file, read_markdown, collect_all_markdown_files
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -85,21 +85,23 @@ async def batch_process(
     input_paths: List[str],
     output_dir: str,
     config: Config,
-    max_concurrent: int = 1,
-    skip_errors: bool = False
+    skip_errors: bool = False,
+    file_delay: float = 2.0,
+    chunk_delay: float = 0.5
 ):
     """
-    批量处理
+    批量处理 - 顺序执行版本
     
     Args:
         input_paths: 输入路径列表（文件或文件夹）
         output_dir: 输出目录
         config: 配置
-        max_concurrent: 最大并发文件数
         skip_errors: 是否跳过错误继续处理
+        file_delay: 文件间处理延迟（秒）
+        chunk_delay: 切片间处理延迟（秒）
     """
     print("=" * 60)
-    print("批量QA生成")
+    print("批量QA生成 (顺序执行模式)")
     print("=" * 60)
     
     # 收集所有MD文件
@@ -108,7 +110,7 @@ async def batch_process(
     
     if not md_files:
         print("❌ 未找到任何Markdown文件")
-        return
+        return None
     
     print(f"\n找到 {len(md_files)} 个Markdown文件:")
     for i, file in enumerate(md_files[:10], 1):
@@ -116,67 +118,54 @@ async def batch_process(
     if len(md_files) > 10:
         print(f"  ... 还有 {len(md_files) - 10} 个文件")
     
-    # 确认处理
-    print(f"\n输出目录: {output_dir}")
-    print(f"并发数: {max_concurrent}")
+    # 显示处理参数
+    print(f"\n⚙️  处理参数:")
+    print(f"  输出目录: {output_dir}")
+    print(f"  文件间延迟: {file_delay}s")
+    print(f"  切片间延迟: {chunk_delay}s")
+    print(f"  跳过错误: {'✓' if skip_errors else '✗'}")
     
     # 创建输出目录
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # ✅ 强制降低内部并发，避免API限流
+    config.max_workers = 1  # 每个文件内部顺序处理切片
+    
     # 处理文件
     print(f"\n{'='*60}")
-    print("开始处理")
+    print("开始顺序处理")
     print('='*60)
     
     results = []
-    semaphore = asyncio.Semaphore(max_concurrent)
-    
-    async def process_with_semaphore(file_path: Path, index: int):
-        async with semaphore:
-            print(f"\n[{index + 1}/{len(md_files)}] 处理: {file_path.name}")
-            result = await process_single_file(file_path, config, output_path)
-            
-            # 打印即时状态
-            if result["status"] == "success":
-                print(f"  ✅ 完成: {result['qa_pairs']} 个QA对 ({result['time']:.1f}s)")
-            else:
-                print(f"  ❌ 失败: {result['error']}")
-                if not skip_errors:
-                    raise Exception(f"处理失败: {file_path.name} - {result['error']}")
-            
-            return result
-    
-    # 执行处理
     start_time = datetime.now()
     
-    tasks = [
-        process_with_semaphore(file, i) 
-        for i, file in enumerate(md_files)
-    ]
-    
-    if skip_errors:
-        # 使用 return_exceptions=True 来捕获异常但不中断
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        # 处理可能的异常结果
-        processed_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                processed_results.append({
-                    "file": md_files[i].name,
-                    "file_path": str(md_files[i]),
-                    "status": "error",
-                    "chunks": 0,
-                    "qa_pairs": 0,
-                    "output": None,
-                    "time": 0,
-                    "error": str(result)
-                })
-            else:
-                processed_results.append(result)
-        results = processed_results
-    else:
-        results = await asyncio.gather(*tasks)
+    # ✅ 顺序处理每个文件
+    for i, file_path in enumerate(md_files):
+        print(f"\n[{i + 1}/{len(md_files)}] 处理: {file_path.name}")
+        
+        # ✅ 文件间添加延迟（第一个文件除外）
+        if i > 0:
+            print(f"  ⏳ 等待 {file_delay} 秒...")
+            await asyncio.sleep(file_delay)
+        
+        # 处理单个文件
+        result = await process_single_file(file_path, config, output_path)
+        results.append(result)
+        
+        # 打印即时状态
+        if result["status"] == "success":
+            print(f"  ✅ 完成: {result['qa_pairs']} 个QA对 ({result['time']:.1f}s)")
+        else:
+            print(f"  ❌ 失败: {result['error']}")
+            if not skip_errors:
+                print(f"\n⚠️  处理中断，使用 --skip-errors 跳过错误继续处理")
+                break
+        
+        # 显示进度
+        success_so_far = sum(1 for r in results if r["status"] == "success")
+        qa_so_far = sum(r["qa_pairs"] for r in results)
+        print(f"  📊 当前进度: {success_so_far}/{i+1} 成功, 共 {qa_so_far} 个QA对")
     
     total_time = (datetime.now() - start_time).total_seconds()
     
@@ -192,13 +181,14 @@ async def batch_process(
     
     print(f"\n📊 统计:")
     print(f"  总文件数: {len(md_files)}")
+    print(f"  已处理: {len(results)}")
     print(f"  成功: {success_count}")
     print(f"  失败: {error_count}")
     print(f"  总切片数: {total_chunks}")
     print(f"  总QA对数: {total_qa}")
     print(f"  总耗时: {total_time:.2f}s")
-    if len(md_files) > 0:
-        print(f"  平均: {total_time / len(md_files):.2f}s/文件")
+    if len(results) > 0:
+        print(f"  平均: {total_time / len(results):.2f}s/文件")
     
     # 成功的文件
     if success_count > 0:
@@ -219,19 +209,23 @@ async def batch_process(
     batch_report = {
         "summary": {
             "total_files": len(md_files),
+            "processed_files": len(results),
             "success_count": success_count,
             "error_count": error_count,
             "total_chunks": total_chunks,
             "total_qa_pairs": total_qa,
             "total_time_seconds": total_time,
-            "average_time_per_file": total_time / len(md_files) if md_files else 0
+            "average_time_per_file": total_time / len(results) if results else 0
         },
         "config": {
             "use_agent_mode": config.use_agent_mode,
             "auto_fallback": config.auto_fallback,
             "force_all_types": config.force_all_types,
             "questions_per_type": config.questions_per_type,
-            "max_workers": config.max_workers
+            "max_workers": config.max_workers,
+            "file_delay": file_delay,
+            "chunk_delay": chunk_delay,
+            "sequential_mode": True
         },
         "results": results,
         "created_at": datetime.now().isoformat()
@@ -251,10 +245,15 @@ async def batch_process(
                     with open(r["output"], 'r', encoding='utf-8') as f:
                         qa_data = json.load(f)
                         # 添加来源信息
-                        for qa in qa_data:
-                            if isinstance(qa, dict):
-                                qa["source_file"] = r["file"]
-                        all_qa_pairs.extend(qa_data)
+                        if isinstance(qa_data, list):
+                            for qa in qa_data:
+                                if isinstance(qa, dict):
+                                    qa["source_file"] = r["file"]
+                            all_qa_pairs.extend(qa_data)
+                        elif isinstance(qa_data, dict):
+                            # 处理字典格式的输出
+                            qa_data["source_file"] = r["file"]
+                            all_qa_pairs.append(qa_data)
                 except Exception as e:
                     logger.error(f"合并失败: {r['output']}, {e}")
         
@@ -290,49 +289,28 @@ async def batch_process(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='QA生成器 - 批量处理',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  # 处理单个文件夹
-  python batch_process.py ./docs -o ./output
-  
-  # 处理多个文件夹
-  python batch_process.py ./docs1 ./docs2 -o ./output
-  
-  # 处理指定的多个文件
-  python batch_process.py file1.md file2.md file3.md -o ./output
-  
-  # 混合处理文件夹和文件
-  python batch_process.py ./docs file1.md file2.md -o ./output
-  
-  # 生成所有类型问题，并发处理
-  python batch_process.py ./docs -o ./output --all-types --concurrent 3
-  
-  # 跳过错误继续处理
-  python batch_process.py ./docs -o ./output --skip-errors
-        """
-    )
+    parser = argparse.ArgumentParser(description='QA生成器 - 批量处理（顺序执行模式）',formatter_class=argparse.RawDescriptionHelpFormatter,)
     
     # 输入输出参数
     parser.add_argument('inputs', nargs='+', help='输入路径（可以是文件夹或Markdown文件，支持多个）')
-    parser.add_argument('-o', '--output', required=True,help='输出目录路径')
+    parser.add_argument('-o', '--output', required=True, help='输出目录路径')
     
-    # 处理配置
-    parser.add_argument('--concurrent', type=int, default=2,help='同时处理的文件数（默认: 1）')
-    parser.add_argument('--no-agent', action='store_true', help='不使用Agent模式')
+    # 延迟配置（关键参数）
+    parser.add_argument('--file-delay', type=float, default=2.0,help='文件间处理延迟秒数（默认: 2.0）')
+    parser.add_argument('--chunk-delay', type=float, default=0.5, help='切片间处理延迟秒数（默认: 0.5）')
+    
+    # 模式配置
+    parser.add_argument('--no-agent', action='store_true',  help='不使用Agent模式')
     parser.add_argument('--no-fallback', action='store_true', help='不自动回退到Pipeline')
     
     # QA生成配置
     parser.add_argument('--all-types', action='store_true', help='生成所有类型问题')
-    parser.add_argument('--num-questions', default=2,help='每种类型生成的问题数（默认: 2）')
-    parser.add_argument('--workers', type=int, default=3,help='每个文件内部的最大并发切片数（默认: 3）')
+    parser.add_argument('--num-questions', type=int, default=2, help='每种类型生成的问题数（默认: 2）')
     
     # 其他选项
-    parser.add_argument('--skip-errors', action='store_true',help='跳过处理失败的文件，继续处理其他文件')
-    parser.add_argument('-v', '--verbose',action='store_true',help='显示详细日志')
-    parser.add_argument('--dry-run',action='store_true',help='仅显示将要处理的文件，不实际执行')
+    parser.add_argument('--skip-errors', action='store_true', help='跳过处理失败的文件，继续处理其他文件')
+    parser.add_argument('-v', '--verbose', action='store_true',help='显示详细日志')
+    parser.add_argument('--dry-run', action='store_true',help='仅显示将要处理的文件，不实际执行')
     
     args = parser.parse_args()
     
@@ -346,7 +324,7 @@ def main():
     config.auto_fallback = not args.no_fallback
     config.force_all_types = args.all_types
     config.questions_per_type = args.num_questions
-    config.max_workers = args.workers
+    config.max_workers = 1  # ✅ 强制顺序执行
     
     # 显示配置
     print(f"\n⚙️  配置:")
@@ -354,12 +332,13 @@ def main():
     for i, p in enumerate(args.inputs, 1):
         print(f"    {i}. {p}")
     print(f"  输出目录: {args.output}")
-    print(f"  文件并发数: {args.concurrent}")
+    print(f"  执行模式: 顺序执行（避免API限流）")
+    print(f"  文件间延迟: {args.file_delay}s")
+    print(f"  切片间延迟: {args.chunk_delay}s")
     print(f"  Agent模式: {'✓' if config.use_agent_mode else '✗'}")
     print(f"  自动回退: {'✓' if config.auto_fallback else '✗'}")
     print(f"  所有类型: {'✓' if config.force_all_types else '✗'}")
     print(f"  每类问题数: {config.questions_per_type}")
-    print(f"  切片并发数: {config.max_workers}")
     print(f"  跳过错误: {'✓' if args.skip_errors else '✗'}")
     
     # Dry run 模式
@@ -370,12 +349,25 @@ def main():
             for i, file in enumerate(md_files, 1):
                 print(f"  {i}. {file}")
             print(f"\n共 {len(md_files)} 个文件将被处理")
+            
+            # 预估时间
+            avg_time_per_file = 30  # 假设每个文件平均30秒
+            total_delay = args.file_delay * (len(md_files) - 1)
+            estimated_time = len(md_files) * avg_time_per_file + total_delay
+            print(f"预估处理时间: {estimated_time / 60:.1f} 分钟")
         else:
             print("  未找到任何Markdown文件")
         return
     
     try:
-        result = asyncio.run(batch_process(args.inputs,args.output,config,args.concurrent,args.skip_errors))
+        result = asyncio.run(batch_process(
+            args.inputs,
+            args.output,
+            config,
+            args.skip_errors,
+            args.file_delay,
+            args.chunk_delay
+        ))
         
         # 根据结果设置退出码
         if result and result.get("error", 0) > 0 and not args.skip_errors:
@@ -383,7 +375,7 @@ def main():
             
     except KeyboardInterrupt:
         print("\n\n⚠️  用户中断")
-        sys.exit(130)  # 标准的 Ctrl+C 退出码
+        sys.exit(130)
     except Exception as e:
         logger.error(f"批量处理失败: {e}")
         print(f"\n❌ 批量处理失败: {e}")

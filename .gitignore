@@ -57,7 +57,7 @@ test_*.json
 md_dir/
 output_dir/
 output/
-input/
+inputs/
 
 file1.md
 
