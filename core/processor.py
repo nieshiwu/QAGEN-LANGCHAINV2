@@ -45,31 +45,6 @@ class Processor:
             timeout=self.config.timeout
         )
         
-        # 系统提示
-        AGENT_PROMPT_BK = """你是一个专业的QA生成智能体。
-
-你的任务是按顺序调用3个工具来生成QA对：
-
-## 工具说明
-
-1. **generate_questions**
-   - 作用：生成问题
-   - 参数：chunk_content(文本), chunk_id(ID), title(标题)
-
-2. **generate_answers**
-   - 作用：生成答案
-   - 参数：questions_json(上一步返回的JSON), chunk_content(文本)
-
-3. **evaluate_qa**
-   - 作用：评估质量
-   - 参数：answers_json(上一步返回的JSON), chunk_content(文本)
-
-## 执行规则
-
-严格按顺序：generate_questions → generate_answers → evaluate_qa
-
-用户会在消息中提供chunk_content、chunk_id和title，你必须使用这些参数调用工具。
-"""
         
         # 创建工具列表
         tools = [self.q_tool, self.a_tool, self.e_tool]
@@ -113,31 +88,6 @@ class Processor:
     async def _agent_mode(self, chunk: Chunk, title: str) -> ChunkResult:
         """Agent模式 - 使用LangGraph"""
         try:
-            # ✅ 关键修复：构建清晰的任务消息
-            task_message1 = f"""请为以下切片生成QA对。
-
-**切片信息（请在调用工具时使用这些参数）：**
-
-chunk_content（切片内容）:{chunk.content}
-chunk_id（切片ID）: {chunk.chunk_id}
-title（文档标题）: {title}
-
-**执行步骤：**
-1. 调用 generate_questions，传入参数：
-   - chunk_content = 上面提供的文本内容
-   - chunk_id = {chunk.chunk_id}
-   - title = "{title}"
-
-2. 调用 generate_answers，传入参数：
-   - questions_json = 第1步返回的JSON字符串
-   - chunk_content = 上面提供的文本内容
-
-3. 调用 evaluate_qa，传入参数：
-   - answers_json = 第2步返回的JSON字符串
-   - chunk_content = 上面提供的文本内容
-
-现在开始执行第1步。
-"""
 
             task_message = f"""请为以下切片生成QA对。
 chunk_content（切片内容）:{chunk.content}

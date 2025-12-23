@@ -15,7 +15,7 @@ class Config:
     
     # ==================== LLM配置 ====================
     model_name: str = "qwen-max"
-    api_key: str = "sk-d827323e50504e0f955ea3e319d933e0"
+    api_key: str = ""
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     temperature: float = 0.7
     max_tokens: int = 4096
