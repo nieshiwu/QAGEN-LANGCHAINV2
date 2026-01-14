@@ -108,23 +108,34 @@ class Orchestrator:
         print(f"  总耗时: {report.total_time:.1f}s")
         
         if report.qa_pairs:
-            scores = []
+            # 检查是否有实际的评估数据
+            has_evaluation = any(qa.judge for qa in report.qa_pairs)
+            
+            if has_evaluation:
+                scores = []
+                types = {}
+                for qa in report.qa_pairs:
+                    j = qa.judge
+                    avg = (j.get("Completeness & Clarity", 3) + 
+                           j.get("Technical Depth", 0) + 
+                           j.get("Knowledge & Analysis", 0) + 
+                           j.get("Accuracy & Citation Transparency", 3) + 
+                           j.get("Hallucination Index", 5) + 
+                           j.get("Difficulty & Reasoning Depth", 1)) / 6
+                    scores.append(avg)
+                    types[qa.question_type] = types.get(qa.question_type, 0) + 1
+                
+                print(f"\n⭐ 评分:")
+                print(f"  平均: {sum(scores)/len(scores):.2f}/5.0")
+                print(f"  最高: {max(scores):.2f}")
+                print(f"  最低: {min(scores):.2f}")
+            else:
+                print(f"\n⭐ 评分: 评估已跳过")
+            
+            # 显示问题类型统计
             types = {}
             for qa in report.qa_pairs:
-                j = qa.judge
-                avg = (j.get("Completeness & Clarity", 3) + 
-                       j.get("Technical Depth", 0) + 
-                       j.get("Knowledge & Analysis", 0) + 
-                       j.get("Accuracy & Citation Transparency", 3) + 
-                       j.get("Hallucination Index", 5) + 
-                       j.get("Difficulty & Reasoning Depth", 1)) / 6
-                scores.append(avg)
                 types[qa.question_type] = types.get(qa.question_type, 0) + 1
-            
-            print(f"\n⭐ 评分:")
-            print(f"  平均: {sum(scores)/len(scores):.2f}/5.0")
-            print(f"  最高: {max(scores):.2f}")
-            print(f"  最低: {min(scores):.2f}")
             
             print(f"\n📋 类型:")
             for t, c in types.items():

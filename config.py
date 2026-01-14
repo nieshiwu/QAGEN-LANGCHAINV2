@@ -22,7 +22,7 @@ class Config:
     timeout: int = 180
     
     # ==================== 切片配置 ====================
-    chunk_size: int = 500              # 切片大小
+    chunk_size: int = 3000              # 切片大小
     chunk_overlap: int = 50            # 重叠大小
     
     # ==================== 问题生成配置 ====================
@@ -33,7 +33,7 @@ class Config:
     force_all_types: bool = False      # ✅ 是否强制生成所有类型
     
     # ==================== 处理模式配置 ====================
-    use_agent_mode: bool = True        # ✅ 优先使用Agent模式
+    use_agent_mode: bool = False       # ✅ 默认使用流水线模式，使用--use-agent参数启用Agent模式
     auto_fallback: bool = True         # ✅ Agent失败时自动回退
     
     # ==================== 并发与重试 ====================
@@ -44,12 +44,18 @@ class Config:
     # ==================== 输出配置 ====================
     output_dir: str = "./output"
     
+    # ==================== 分类标签配置 ====================
+    excel_labels_path: str = ""       # Excel标签文件路径
+    
+    # ==================== 处理流程配置 ====================
+    enable_evaluation: bool = False   # 是否启用第三步评估（默认关闭）
+    
     def __post_init__(self):
         """从环境变量读取"""
         self.api_key = os.getenv("DASHSCOPE_API_KEY", self.api_key)
         self.model_name = os.getenv("MODEL_NAME", self.model_name)
         self.base_url = os.getenv("OPENAI_BASE_URL", self.base_url)
         
-        if not self.api_key:
-            raise ValueError("未设置API Key，请在.env中配置DASHSCOPE_API_KEY")
+        # if not self.api_key:
+        #     raise ValueError("未设置API Key，请在.env中配置DASHSCOPE_API_KEY")
         

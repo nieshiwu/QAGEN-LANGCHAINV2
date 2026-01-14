@@ -44,9 +44,31 @@ class QAPair:
     judge: Dict[str, Any]
     context_page: List[int]
     
+    # 动态字段（用于存储分类标签等）
+    _extra_fields: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    
+    def __setattr__(self, name, value):
+        """重写__setattr__以捕获动态字段"""
+        if name in self.__dataclass_fields__:
+            super().__setattr__(name, value)
+        else:
+            # 存储到额外字段字典中
+            if not hasattr(self, '_extra_fields'):
+                super().__setattr__('_extra_fields', {})
+            self._extra_fields[name] = value
+    
+    def __getattr__(self, name):
+        """重写__getattr__以获取动态字段"""
+        if name in self.__dataclass_fields__:
+            return super().__getattribute__(name)
+        elif hasattr(self, '_extra_fields') and name in self._extra_fields:
+            return self._extra_fields[name]
+        else:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+    
     def to_dict(self) -> Dict[str, Any]:
-        """转为字典"""
-        return {
+        """转为字典，包含所有字段"""
+        result = {
             "Q": self.Q,
             "COT": self.COT,
             "A": self.A,
@@ -58,6 +80,12 @@ class QAPair:
             "judge": self.judge,
             "context_page": self.context_page
         }
+        
+        # 添加所有额外字段
+        if hasattr(self, '_extra_fields'):
+            result.update(self._extra_fields)
+        
+        return result
 
 
 @dataclass

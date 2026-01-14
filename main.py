@@ -1,5 +1,5 @@
 """
-单文件处理入口 - 支持MD文件验证
+单文件处理入口 - 支持MD文件验证和分类标签
 """
 import argparse
 import asyncio
@@ -7,6 +7,13 @@ from pathlib import Path
 from config import Config
 from core.orchestrator import Orchestrator
 from utils.judge import is_markdown_file,read_markdown
+
+# 可选：导入带分类标签的配置
+try:
+    from config_with_labels import get_enhanced_config
+    HAS_ENHANCED_CONFIG = True
+except ImportError:
+    HAS_ENHANCED_CONFIG = False
 
 
 async def main_async(args):
@@ -36,12 +43,23 @@ async def main_async(args):
         return
     
     # 配置
-    config = Config()
+    if args.enhanced and HAS_ENHANCED_CONFIG:
+        print("🔧 使用增强配置（含分类标签）")
+        config = get_enhanced_config()
+    else:
+        config = Config()
+        if args.enhanced and not HAS_ENHANCED_CONFIG:
+            print("⚠️ 未找到增强配置文件，使用默认配置")
+    
     config.use_agent_mode = not args.no_agent
     config.auto_fallback = not args.no_fallback
     config.force_all_types = args.all_types
     config.questions_per_type = args.num_questions
     config.max_workers = 1 if args.sequential else args.workers
+    
+    # 如果指定了Excel路径，更新配置
+    if args.excel_path:
+        config.excel_labels_path = args.excel_path
     
     # 显示配置
     print(f"\n⚙️  配置:")
@@ -50,6 +68,9 @@ async def main_async(args):
     print(f"  所有类型: {'✓' if config.force_all_types else '✗'}")
     print(f"  每类问题数: {config.questions_per_type}")
     print(f"  并发数: {config.max_workers}")
+    print(f"  分类标签: {'✓' if config.excel_labels_path else '✗'}")
+    if config.excel_labels_path:
+        print(f"    Excel文件: {config.excel_labels_path}")
     
     # 运行
     orch = Orchestrator(config)
@@ -94,6 +115,10 @@ def main():
     parser.add_argument('--num-questions', type=int, default=2, help='每种类型生成的问题数')
     parser.add_argument('--sequential', action='store_true', help='顺序处理（不并发）')
     parser.add_argument('--workers', type=int, default=3, help='最大并发数')
+    
+    # 分类标签配置
+    parser.add_argument('--enhanced', action='store_true', help='使用增强配置（含分类标签功能）')
+    parser.add_argument('--excel-path', help='Excel标签文件路径')
     
     args = parser.parse_args()
     

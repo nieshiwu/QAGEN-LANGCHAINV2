@@ -3,6 +3,7 @@ LLM客户端
 """
 import asyncio
 from typing import Optional
+from langchain.chat_models import init_chat_model
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -12,10 +13,19 @@ class LLM:
     
     def __init__(self, config):
         self.config = config
-        self.client = ChatOpenAI(
-            model=config.model_name,
-            openai_api_key=config.api_key,
-            openai_api_base=config.base_url,
+        # self.client = ChatOpenAI(
+        #     model=config.model_name,
+        #     openai_api_key=config.api_key,
+        #     openai_api_base=config.base_url,
+        #     temperature=config.temperature,
+        #     max_tokens=config.max_tokens,
+        #     timeout=config.timeout
+        # )
+
+        self.client = init_chat_model(
+            model= "openai:"+ config.model_name,
+            api_key=config.api_key,
+            base_url=config.base_url,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             timeout=config.timeout

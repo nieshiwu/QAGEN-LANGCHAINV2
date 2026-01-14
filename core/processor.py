@@ -12,6 +12,7 @@ from core.models import Chunk, QAPair, ChunkResult
 from tools.question_gen import QuestionTool
 from tools.answer_gen import AnswerTool
 from tools.evaluator import EvalTool
+from tools.classify_label import ClassifyLabelTool
 
 from prompts.templates import AGENT_PROMPT
 
@@ -28,6 +29,10 @@ class Processor:
         self.a_tool = AnswerTool(llm)
         self.e_tool = EvalTool(llm)
         
+        # 初始化分类标签工具（如果配置了Excel文件）
+        excel_path = getattr(config, 'excel_labels_path', None)
+        self.cl_tool = ClassifyLabelTool(llm, excel_path=excel_path) if excel_path else None
+        
         # 如果使用Agent，初始化
         if config.use_agent_mode:
             self._init_agent()
@@ -37,10 +42,19 @@ class Processor:
         print("  🤖 初始化Agent模式...")
         
         # 创建Agent专用LLM
-        agent_llm = ChatOpenAI(
-            model=self.config.model_name,
-            openai_api_key=self.config.api_key,
-            openai_api_base=self.config.base_url,
+        # agent_llm = ChatOpenAI(
+        #     model=self.config.model_name,
+        #     openai_api_key=self.config.api_key,
+        #     openai_api_base=self.config.base_url,
+        #     temperature=0.1,
+        #     timeout=self.config.timeout
+        # )
+
+        from langchain.chat_models import init_chat_model
+        agent_llm = init_chat_model(
+            model="openai:"+self.config.model_name,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
             temperature=0.1,
             timeout=self.config.timeout
         )
@@ -48,6 +62,8 @@ class Processor:
         
         # 创建工具列表
         tools = [self.q_tool, self.a_tool, self.e_tool]
+        if self.cl_tool:
+            tools.append(self.cl_tool)
         
         # 创建Agent（LangGraph）
         self.agent = create_agent(
@@ -167,8 +183,31 @@ title（文档标题）: {title}
                 
                 print(f"    消息{msg_idx}: ToolMessage, name={tool_name}, 长度={len(content)}")
                 
-                # 如果是evaluate_qa的输出
-                if tool_name == "evaluate_qa":
+                # 优先查找分类标签工具的输出（包含增强后的QA对）
+                if tool_name == "classify_and_label":
+                    try:
+                        data = json.loads(content)
+                        
+                        if data.get("status") == "ok" and "enhanced_qa_pairs" in data:
+                            qa_list = data["enhanced_qa_pairs"]
+                            print(f"    ✅ 成功提取增强后的 {len(qa_list)} 个QA对")
+                            
+                            # 输出训练/测试分割统计
+                            stats = data.get("stats", {})
+                            print(f"    📊 统计信息: 总计{stats.get('total_qa', 0)}, 训练{stats.get('train_count', 0)}, 测试{stats.get('test_count', 0)}")
+                            
+                            return self._to_qa_objects(qa_list, chunk)
+                        else:
+                            print(f"    ⚠️  状态: {data.get('status')}")
+                            
+                    except json.JSONDecodeError as e:
+                        print(f"    ❌ JSON解析失败: {e}")
+                        print(f"    内容: {content[:300]}...")
+                    except Exception as e:
+                        print(f"    ❌ 处理失败: {e}")
+                
+                # 如果没有分类标签工具，则查找evaluate_qa的输出
+                elif tool_name == "evaluate_qa":
                     try:
                         data = json.loads(content)
                         
@@ -200,18 +239,35 @@ title（文档标题）: {title}
         """转换为QAPair对象"""
         result = []
         for qa in qa_list:
-            result.append(QAPair(
+            # 创建基础QAPair对象，确保提供所有必需参数
+            qa_pair = QAPair(
                 Q=qa.get("Q", ""),
                 COT=qa.get("COT", ""),
                 A=qa.get("A", ""),
                 ref=qa.get("ref", []),
-                file_path=chunk.file_path,
-                file_name=chunk.file_name,
-                source_content=qa.get("source", chunk.content),
-                question_type=qa.get("type", ""),
+                file_path=chunk.file_path,  # 总是从chunk获取
+                file_name=chunk.file_name,  # 总是从chunk获取
+                source_content=qa.get("source_content", qa.get("source", chunk.content)),
+                question_type=qa.get("question_type", qa.get("type", "")),
                 judge=qa.get("judge", {}),
-                context_page=chunk.page_numbers
-            ))
+                context_page=qa.get("context_page", chunk.page_numbers)
+            )
+            
+            # 检查是否已经是增强版（包含Excel标签和关键词）
+            if "keyword" in qa or any(key.startswith("知识库-") for key in qa.keys()):
+                # 已经是增强版，保留所有增强字段，但仍需添加file_path和file_name
+                for key, value in qa.items():
+                    if key not in ["Q", "COT", "A", "ref", "source_content", "question_type", "judge", "context_page"]:
+                        setattr(qa_pair, key, value)
+                # 确保添加必需的file_path和file_name
+                qa_pair.file_path = chunk.file_path
+                qa_pair.file_name = chunk.file_name
+            else:
+                # 未增强版，添加传统字段
+                qa_pair.file_path = chunk.file_path
+                qa_pair.file_name = chunk.file_name
+            
+            result.append(qa_pair)
         return result
     
     async def _pipeline_with_retry(self, chunk: Chunk, title: str) -> ChunkResult:
@@ -251,21 +307,61 @@ title（文档标题）: {title}
             if a_data["status"] != "ok":
                 raise Exception(a_data.get("error"))
             
+            print(f"      a_data键: {list(a_data.keys())}")
             answers = a_data.get("answers", [])
             print(f"      ✓ {len(answers)} 个答案")
             
-            # Step 3
-            print(f"    Step 3/3: 评估")
-            e_json = await self.e_tool._arun(a_json, chunk.content)
-            e_data = json.loads(e_json)
+            # Step 3: 评估（根据配置决定是否执行）
+            if self.config.enable_evaluation:
+                print(f"    Step 3/4: 评估")
+                e_json = await self.e_tool._arun(a_json, chunk.content)
+                e_data = json.loads(e_json)
+                
+                if e_data["status"] != "ok":
+                    raise Exception(e_data.get("error"))
+                
+                qa_list = e_data.get("qa_pairs", [])
+                print(f"      ✓ {len(qa_list)} 个评估后的QA对")
+            else:
+                print(f"    Step 3/4: 评估（跳过）")
+                print(f"      答案数量: {len(answers)}")
+                # 直接从答案创建QA对
+                qa_list = []
+                for i, ans in enumerate(answers):
+                    question = ans.get("Q", "") if isinstance(ans, dict) else ""
+                    answer = ans.get("A", "") if isinstance(ans, dict) else ""
+                    qa_list.append({
+                        "Q": question,
+                        "A": answer,
+                        "COT": ans.get("COT", "") if isinstance(ans, dict) else "",
+                        "ref": ans.get("ref", []) if isinstance(ans, dict) else [],
+                        "question_type": ans.get("type", "") if isinstance(ans, dict) else "",
+                        "judge": {}  # 跳过评估时为空
+                    })
+                print(f"      ✓ 创建 {len(qa_list)} 个未评估QA对")
             
-            if e_data["status"] != "ok":
-                raise Exception(e_data.get("error"))
+            # Step 4: 分类标签（如果工具可用）
+            if self.cl_tool:
+                print(f"    Step 4/4: 分类标签")
+                # 如果启用了评估，使用评估后的JSON；否则使用答案JSON
+                input_json = e_json if self.config.enable_evaluation else a_json
+                cl_json = await self.cl_tool._arun(input_json, chunk.file_name or "", chunk.file_path or "")
+                cl_data = json.loads(cl_json)
+                
+                if cl_data["status"] == "ok":
+                    enhanced_qa_list = cl_data.get("enhanced_qa_pairs", qa_list)
+                    stats = cl_data.get("stats", {})
+                    print(f"      ✓ 增强后 {len(enhanced_qa_list)} 个QA对")
+                    print(f"      📊 训练:{stats.get('train_count', 0)}, 测试:{stats.get('test_count', 0)}")
+                    qa_pairs = self._to_qa_objects(enhanced_qa_list, chunk)
+                else:
+                    print(f"      ⚠️ 分类标签失败，使用原始QA对")
+                    qa_pairs = self._to_qa_objects(qa_list, chunk)
+            else:
+                print(f"    跳过分类标签（未配置）")
+                qa_pairs = self._to_qa_objects(qa_list, chunk)
             
-            qa_list = e_data.get("qa_pairs", [])
-            qa_pairs = self._to_qa_objects(qa_list, chunk)
-            
-            print(f"      ✓ {len(qa_pairs)} 个QA对")
+            print(f"      ✓ 最终 {len(qa_pairs)} 个QA对")
             
             return ChunkResult(
                 chunk_id=chunk.chunk_id,
