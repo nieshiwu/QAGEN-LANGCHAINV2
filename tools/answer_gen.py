@@ -49,42 +49,25 @@ class AnswerTool(BaseTool):
             questions = data.get("questions", [])
             chunk_id = data.get("chunk_id", 0)
             
-            # 并发生成答案
-            async def generate_single_answer(q):
-                try:
-                    prompt = ANSWER_PROMPT.format(
-                        context=chunk_content,
-                        question=q["question"],
-                        qtype=q["type"]
-                    )
-                    resp = await llm.call(prompt)
-                    parsed = extract_answer(resp)
-                    
-                    return {
-                        "Q": q["question"],
-                        "type": q["type"],
-                        "chunk_id": chunk_id,
-                        "source": chunk_content,
-                        "COT": parsed["cot"],
-                        "A": parsed["answer"],
-                        "ref": parsed["ref"]
-                    }
-                except Exception as e:
-                    # 单个问题失败不应影响整体
-                    return {
-                        "Q": q["question"],
-                        "type": q["type"],
-                        "chunk_id": chunk_id,
-                        "source": chunk_content,
-                        "COT": "",
-                        "A": "Error generating answer",
-                        "ref": [],
-                        "error": str(e)
-                    }
-
-            # 创建任务列表并并发执行
-            tasks = [generate_single_answer(q) for q in questions]
-            answers = await asyncio.gather(*tasks)
+            answers = []
+            for q in questions:
+                prompt = ANSWER_PROMPT.format(
+                    context=chunk_content,
+                    question=q["question"],
+                    qtype=q["type"]
+                )
+                resp = await llm.call(prompt)
+                parsed = extract_answer(resp)
+                
+                answers.append({
+                    "Q": q["question"],
+                    "type": q["type"],
+                    "chunk_id": chunk_id,
+                    "source": chunk_content,
+                    "COT": parsed["cot"],
+                    "A": parsed["answer"],
+                    "ref": parsed["ref"]
+                })
             
             return json.dumps({
                 "status": "ok",
